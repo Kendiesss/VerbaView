@@ -155,6 +155,26 @@ export default function App() {
                 Generate <ChevronRight size={18} />
               </button>
             </div>
+
+            {/* Quick Samples */}
+            <div className="mt-6 flex flex-wrap gap-3">
+              <span className="text-xs text-white/30 uppercase tracking-widest font-bold flex items-center gap-2 mr-2">
+                <Sparkles size={14} className="text-orange-500" /> Quick Samples:
+              </span>
+              {[
+                { label: "Cyberpunk City", text: "A futuristic cyberpunk city at night with neon lights reflecting on wet streets. Flying vehicles glide between massive skyscrapers while a light rain falls." },
+                { label: "Deep Sea Discovery", text: "An underwater exploration of a glowing coral reef. A small submarine discovers an ancient, bioluminescent shipwreck teeming with exotic alien-like fish." },
+                { label: "Mountain Sunrise", text: "A breathtaking sunrise over a snow-capped mountain range. The first light of day turns the peaks into glowing gold as a lone eagle soars through the crisp morning air." }
+              ].map((sample, i) => (
+                <button
+                  key={i}
+                  onClick={() => setPrompt(sample.text)}
+                  className="px-4 py-2 bg-white/5 border border-white/10 rounded-full text-xs hover:bg-white/10 hover:border-orange-500/30 transition-all text-white/60 hover:text-white"
+                >
+                  {sample.label}
+                </button>
+              ))}
+            </div>
             
             <div className="grid grid-cols-3 gap-6 mt-12">
               {[

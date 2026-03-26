@@ -5,12 +5,17 @@ const apiKey = process.env.GEMINI_API_KEY || "";
 
 export const getAI = () => new GoogleGenAI({ apiKey });
 
-async function withRetry<T>(fn: () => Promise<T>, retries = 3, delay = 2000): Promise<T> {
+async function withRetry<T>(fn: () => Promise<T>, retries = 5, delay = 3000): Promise<T> {
   try {
     return await fn();
   } catch (error: any) {
-    if (retries > 0 && (error.message?.includes("429") || error.status === "RESOURCE_EXHAUSTED")) {
-      console.warn(`Rate limit hit, retrying in ${delay}ms...`);
+    const errorMsg = error.message || "";
+    const isRateLimit = errorMsg.includes("429") || 
+                        errorMsg.includes("RESOURCE_EXHAUSTED") || 
+                        errorMsg.includes("quota");
+    
+    if (retries > 0 && isRateLimit) {
+      console.warn(`Rate limit hit, retrying in ${delay}ms... (${retries} retries left)`);
       await new Promise(resolve => setTimeout(resolve, delay));
       return withRetry(fn, retries - 1, delay * 2);
     }
@@ -85,15 +90,15 @@ export async function generateVoiceover(text: string): Promise<string> {
 export async function generateSceneImage(prompt: string): Promise<string> {
   return withRetry(async () => {
     const ai = getAI();
+    // Switching to gemini-2.5-flash-image for better availability
     const response = await ai.models.generateContent({
-      model: 'gemini-3.1-flash-image-preview',
+      model: 'gemini-2.5-flash-image',
       contents: {
         parts: [{ text: prompt }],
       },
       config: {
         imageConfig: {
-          aspectRatio: "16:9",
-          imageSize: "1K"
+          aspectRatio: "16:9"
         }
       }
     });
