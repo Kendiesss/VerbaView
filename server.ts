@@ -10,107 +10,108 @@ import ffmpeg from "fluent-ffmpeg";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-async function startServer() {
-  const app = express();
-  const PORT = 3000;
+const app = express();
+const PORT = 3000;
 
-  app.use(cors());
-  app.use(express.json({ limit: '50mb' }));
+app.use(cors());
+app.use(express.json({ limit: '50mb' }));
 
-  // In-memory job store (In production, use Redis or a DB)
-  const jobs = new Map();
+// In-memory job store (In production, use Redis or a DB)
+const jobs = new Map();
 
-  // Ensure temp directories exist
-  const tempDir = path.join(__dirname, 'temp');
-  if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir);
+// Ensure temp directories exist (Use /tmp for Vercel compatibility)
+const isVercel = !!process.env.VERCEL;
+const tempDir = isVercel ? '/tmp' : path.join(__dirname, 'temp');
+if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 
-  // API Routes
-  app.post("/api/jobs", (req, res) => {
-    const { prompt } = req.body;
-    const jobId = uuidv4();
-    
-    jobs.set(jobId, {
-      id: jobId,
-      status: 'storyboarding',
-      progress: 0,
-      prompt,
-      createdAt: new Date(),
-    });
-
-    res.json({ jobId });
+// API Routes
+app.post("/api/jobs", (req, res) => {
+  const { prompt } = req.body;
+  const jobId = uuidv4();
+  
+  jobs.set(jobId, {
+    id: jobId,
+    status: 'storyboarding',
+    progress: 0,
+    prompt,
+    createdAt: new Date(),
   });
 
-  app.get("/api/jobs/:id", (req, res) => {
-    const job = jobs.get(req.params.id);
-    if (!job) return res.status(404).json({ error: "Job not found" });
-    res.json(job);
-  });
+  res.json({ jobId });
+});
 
-  // Endpoint to update job status (called by frontend or internal logic)
-  app.patch("/api/jobs/:id", (req, res) => {
-    const job = jobs.get(req.params.id);
-    if (!job) return res.status(404).json({ error: "Job not found" });
-    
-    const updatedJob = { ...job, ...req.body };
-    jobs.set(req.params.id, updatedJob);
-    res.json(updatedJob);
-  });
+app.get("/api/jobs/:id", (req, res) => {
+  const job = jobs.get(req.params.id);
+  if (!job) return res.status(404).json({ error: "Job not found" });
+  res.json(job);
+});
 
-  // Serve generated videos
-  app.use('/exports', express.static(path.join(__dirname, 'temp')));
+// Endpoint to update job status (called by frontend or internal logic)
+app.patch("/api/jobs/:id", (req, res) => {
+  const job = jobs.get(req.params.id);
+  if (!job) return res.status(404).json({ error: "Job not found" });
+  
+  const updatedJob = { ...job, ...req.body };
+  jobs.set(req.params.id, updatedJob);
+  res.json(updatedJob);
+});
 
-  // Post-Production: FFmpeg Compositing
-  app.post("/api/jobs/:id/composite", async (req, res) => {
-    const job = jobs.get(req.params.id);
-    if (!job || !job.storyboard) return res.status(404).json({ error: "Job or storyboard not found" });
+// Serve generated videos
+app.use('/exports', express.static(tempDir));
 
-    const jobId = req.params.id;
-    const jobDir = path.join(tempDir, jobId);
-    if (!fs.existsSync(jobDir)) fs.mkdirSync(jobDir);
+// Post-Production: FFmpeg Compositing
+app.post("/api/jobs/:id/composite", async (req, res) => {
+  const job = jobs.get(req.params.id);
+  if (!job || !job.storyboard) return res.status(404).json({ error: "Job or storyboard not found" });
 
-    try {
-      const scenes = job.storyboard.scenes;
-      const voiceoverData = job.storyboard.voiceoverUrl.split(',')[1];
-      const voiceoverPath = path.join(jobDir, 'voiceover.wav');
-      fs.writeFileSync(voiceoverPath, Buffer.from(voiceoverData, 'base64'));
+  const jobId = req.params.id;
+  const jobDir = path.join(tempDir, jobId);
+  if (!fs.existsSync(jobDir)) fs.mkdirSync(jobDir, { recursive: true });
 
-      const videoPaths: string[] = [];
-      for (let i = 0; i < scenes.length; i++) {
-        const videoData = scenes[i].videoUrl.split(',')[1];
-        const videoPath = path.join(jobDir, `scene_${i}.mp4`);
-        fs.writeFileSync(videoPath, Buffer.from(videoData, 'base64'));
-        videoPaths.push(videoPath);
-      }
+  try {
+    const scenes = job.storyboard.scenes;
+    const voiceoverData = job.storyboard.voiceoverUrl.split(',')[1];
+    const voiceoverPath = path.join(jobDir, 'voiceover.wav');
+    fs.writeFileSync(voiceoverPath, Buffer.from(voiceoverData, 'base64'));
 
-      const outputPath = path.join(jobDir, 'final.mp4');
-      const command = ffmpeg();
-
-      videoPaths.forEach(p => command.input(p));
-      
-      command
-        .input(voiceoverPath)
-        .on('start', () => {
-          jobs.set(jobId, { ...job, status: 'compositing', progress: 95 });
-        })
-        .on('error', (err) => {
-          console.error('FFmpeg error:', err);
-          jobs.set(jobId, { ...job, status: 'error', error: 'Compositing failed' });
-        })
-        .on('end', () => {
-          const finalUrl = `/exports/${jobId}/final.mp4`;
-          jobs.set(jobId, { ...job, status: 'ready', progress: 100, finalVideoUrl: finalUrl });
-        })
-        .mergeToFile(outputPath, jobDir);
-
-      res.json({ status: 'started' });
-    } catch (error: any) {
-      console.error(error);
-      res.status(500).json({ error: error.message });
+    const videoPaths: string[] = [];
+    for (let i = 0; i < scenes.length; i++) {
+      const videoData = scenes[i].videoUrl.split(',')[1];
+      const videoPath = path.join(jobDir, `scene_${i}.mp4`);
+      fs.writeFileSync(videoPath, Buffer.from(videoData, 'base64'));
+      videoPaths.push(videoPath);
     }
-  });
 
-  // Vite middleware for development
-  if (process.env.NODE_ENV !== "production") {
+    const outputPath = path.join(jobDir, 'final.mp4');
+    const command = ffmpeg();
+
+    videoPaths.forEach(p => command.input(p));
+    
+    command
+      .input(voiceoverPath)
+      .on('start', () => {
+        jobs.set(jobId, { ...job, status: 'compositing', progress: 95 });
+      })
+      .on('error', (err) => {
+        console.error('FFmpeg error:', err);
+        jobs.set(jobId, { ...job, status: 'error', error: 'Compositing failed' });
+      })
+      .on('end', () => {
+        const finalUrl = `/exports/${jobId}/final.mp4`;
+        jobs.set(jobId, { ...job, status: 'ready', progress: 100, finalVideoUrl: finalUrl });
+      })
+      .mergeToFile(outputPath, jobDir);
+
+    res.json({ status: 'started' });
+  } catch (error: any) {
+    console.error(error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Vite middleware for development
+async function startServer() {
+  if (process.env.NODE_ENV !== "production" && !isVercel) {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
@@ -124,9 +125,13 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`VerbaView server running on http://localhost:${PORT}`);
-  });
+  if (!isVercel) {
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`VerbaView server running on http://localhost:${PORT}`);
+    });
+  }
 }
 
 startServer();
+
+export default app;
