@@ -22,22 +22,38 @@ const jobs = new Map();
 // Ensure temp directories exist (Use /tmp for Vercel compatibility)
 const isVercel = !!process.env.VERCEL;
 const tempDir = isVercel ? '/tmp' : path.join(__dirname, 'temp');
-if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+if (!fs.existsSync(tempDir)) {
+  try {
+    fs.mkdirSync(tempDir, { recursive: true });
+  } catch (e) {
+    console.error("Failed to create temp dir:", e);
+  }
+}
+
+// Health Check
+app.get("/api/health", (req, res) => {
+  res.json({ status: "ok", env: isVercel ? "vercel" : "local" });
+});
 
 // API Routes
 app.post("/api/jobs", (req, res) => {
-  const { prompt } = req.body;
-  const jobId = uuidv4();
-  
-  jobs.set(jobId, {
-    id: jobId,
-    status: 'storyboarding',
-    progress: 0,
-    prompt,
-    createdAt: new Date(),
-  });
+  try {
+    const { prompt } = req.body;
+    const jobId = uuidv4();
+    
+    jobs.set(jobId, {
+      id: jobId,
+      status: 'storyboarding',
+      progress: 0,
+      prompt,
+      createdAt: new Date(),
+    });
 
-  res.json({ jobId });
+    res.json({ jobId });
+  } catch (error: any) {
+    console.error("Error creating job:", error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 app.get("/api/jobs/:id", (req, res) => {
@@ -109,29 +125,27 @@ app.post("/api/jobs/:id/composite", async (req, res) => {
   }
 });
 
-// Vite middleware for development
-async function startServer() {
-  if (process.env.NODE_ENV !== "production" && !isVercel) {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
-  }
-
-  if (!isVercel) {
-    app.listen(PORT, "0.0.0.0", () => {
-      console.log(`VerbaView server running on http://localhost:${PORT}`);
-    });
-  }
+// Vite middleware for development (only if not on Vercel)
+if (process.env.NODE_ENV !== "production" && !isVercel) {
+  const vite = await createViteServer({
+    server: { middlewareMode: true },
+    appType: "spa",
+  });
+  app.use(vite.middlewares);
+} else if (!isVercel) {
+  // Local production mode
+  const distPath = path.join(process.cwd(), 'dist');
+  app.use(express.static(distPath));
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(distPath, 'index.html'));
+  });
 }
 
-startServer();
+// Only listen locally, Vercel handles the export
+if (!isVercel) {
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`VerbaView server running on http://localhost:${PORT}`);
+  });
+}
 
 export default app;
