@@ -33,14 +33,8 @@ export default function App() {
     if (!prompt.trim()) return;
 
     try {
-      // 1. Create Job
-      const res = await fetch('/api/jobs', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ prompt })
-      });
-      const { jobId } = await res.json();
-      
+      // 1. Initialize Job
+      const jobId = Math.random().toString(36).substring(7);
       const initialJob: GenerationJob = {
         id: jobId,
         status: 'storyboarding',
@@ -58,15 +52,14 @@ export default function App() {
         storyboard
       };
       setJob(updatedJobWithStoryboard);
-      await updateJobOnServer(jobId, updatedJobWithStoryboard);
 
-      // 3. Asset Generation (Parallel)
+      // 3. Asset Generation
       const fullScript = storyboard.scenes.map(s => s.text).join(' ');
       
       // Generate Voiceover
       const voiceoverUrl = await generateVoiceover(fullScript);
       
-      // Generate Scenes (Sequential for stability in demo, could be parallel)
+      // Generate Scenes
       const updatedScenes: Scene[] = [];
       for (let i = 0; i < storyboard.scenes.length; i++) {
         const scene = storyboard.scenes[i];
@@ -77,29 +70,22 @@ export default function App() {
         
         setJob(prev => prev ? ({
           ...prev,
-          progress: 30 + ((i + 1) / storyboard.scenes.length) * 60,
+          progress: 30 + ((i + 1) / storyboard.scenes.length) * 70,
           storyboard: { ...prev.storyboard!, scenes: [...updatedScenes, ...storyboard.scenes.slice(i + 1)] }
         }) : null);
       }
 
-      const finalAssetsJob: GenerationJob = {
+      const finalJob: GenerationJob = {
         ...updatedJobWithStoryboard,
-        status: 'compositing',
-        progress: 90,
+        status: 'ready',
+        progress: 100,
         storyboard: {
           scenes: updatedScenes,
           voiceoverUrl
         }
       };
-      setJob(finalAssetsJob);
-      await updateJobOnServer(jobId, finalAssetsJob);
-
-      // 4. Post-Production (Server-side FFmpeg)
-      const compositeRes = await fetch(`/api/jobs/${jobId}/composite`, { method: 'POST' });
-      if (!compositeRes.ok) throw new Error("Compositing failed on server");
-
-      // Start polling for final video
-      pollJobStatus(jobId);
+      setJob(finalJob);
+      localStorage.setItem(`verbaview-${jobId}`, JSON.stringify(finalJob));
 
     } catch (error: any) {
       console.error(error);
@@ -107,31 +93,17 @@ export default function App() {
     }
   };
 
-  const updateJobOnServer = async (id: string, data: Partial<GenerationJob>) => {
-    await fetch(`/api/jobs/${id}`, {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(data)
-    });
-  };
-
-  const pollJobStatus = async (id: string) => {
-    const interval = setInterval(async () => {
-      const res = await fetch(`/api/jobs/${id}`);
-      const data = await res.json();
-      setJob(data);
-      if (data.status === 'ready' || data.status === 'error') {
-        clearInterval(interval);
-      }
-    }, 2000);
-  };
-
   const handleDownload = () => {
-    if (job?.finalVideoUrl) {
-      const link = document.createElement('a');
-      link.href = job.finalVideoUrl;
-      link.download = `verbaview-${job.id}.mp4`;
-      link.click();
+    if (job?.storyboard?.scenes) {
+      // Since server-side merge is limited on Vercel, we provide the clips for download
+      job.storyboard.scenes.forEach((scene, i) => {
+        if (scene.videoUrl) {
+          const link = document.createElement('a');
+          link.href = scene.videoUrl;
+          link.download = `scene-${i + 1}.mp4`;
+          link.click();
+        }
+      });
     }
   };
 
