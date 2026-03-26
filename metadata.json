@@ -1,0 +1,7 @@
+{
+  "name": "VerbaView",
+  "description": "High-fidelity text-to-video generator using Gemini 3.1 and FFmpeg.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}

@@ -1,0 +1,132 @@
+import express from "express";
+import { createServer as createViteServer } from "vite";
+import path from "path";
+import { fileURLToPath } from "url";
+import cors from "cors";
+import fs from "fs";
+import { v4 as uuidv4 } from "uuid";
+import ffmpeg from "fluent-ffmpeg";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+async function startServer() {
+  const app = express();
+  const PORT = 3000;
+
+  app.use(cors());
+  app.use(express.json({ limit: '50mb' }));
+
+  // In-memory job store (In production, use Redis or a DB)
+  const jobs = new Map();
+
+  // Ensure temp directories exist
+  const tempDir = path.join(__dirname, 'temp');
+  if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir);
+
+  // API Routes
+  app.post("/api/jobs", (req, res) => {
+    const { prompt } = req.body;
+    const jobId = uuidv4();
+    
+    jobs.set(jobId, {
+      id: jobId,
+      status: 'storyboarding',
+      progress: 0,
+      prompt,
+      createdAt: new Date(),
+    });
+
+    res.json({ jobId });
+  });
+
+  app.get("/api/jobs/:id", (req, res) => {
+    const job = jobs.get(req.params.id);
+    if (!job) return res.status(404).json({ error: "Job not found" });
+    res.json(job);
+  });
+
+  // Endpoint to update job status (called by frontend or internal logic)
+  app.patch("/api/jobs/:id", (req, res) => {
+    const job = jobs.get(req.params.id);
+    if (!job) return res.status(404).json({ error: "Job not found" });
+    
+    const updatedJob = { ...job, ...req.body };
+    jobs.set(req.params.id, updatedJob);
+    res.json(updatedJob);
+  });
+
+  // Serve generated videos
+  app.use('/exports', express.static(path.join(__dirname, 'temp')));
+
+  // Post-Production: FFmpeg Compositing
+  app.post("/api/jobs/:id/composite", async (req, res) => {
+    const job = jobs.get(req.params.id);
+    if (!job || !job.storyboard) return res.status(404).json({ error: "Job or storyboard not found" });
+
+    const jobId = req.params.id;
+    const jobDir = path.join(tempDir, jobId);
+    if (!fs.existsSync(jobDir)) fs.mkdirSync(jobDir);
+
+    try {
+      const scenes = job.storyboard.scenes;
+      const voiceoverData = job.storyboard.voiceoverUrl.split(',')[1];
+      const voiceoverPath = path.join(jobDir, 'voiceover.wav');
+      fs.writeFileSync(voiceoverPath, Buffer.from(voiceoverData, 'base64'));
+
+      const videoPaths: string[] = [];
+      for (let i = 0; i < scenes.length; i++) {
+        const videoData = scenes[i].videoUrl.split(',')[1];
+        const videoPath = path.join(jobDir, `scene_${i}.mp4`);
+        fs.writeFileSync(videoPath, Buffer.from(videoData, 'base64'));
+        videoPaths.push(videoPath);
+      }
+
+      const outputPath = path.join(jobDir, 'final.mp4');
+      const command = ffmpeg();
+
+      videoPaths.forEach(p => command.input(p));
+      
+      command
+        .input(voiceoverPath)
+        .on('start', () => {
+          jobs.set(jobId, { ...job, status: 'compositing', progress: 95 });
+        })
+        .on('error', (err) => {
+          console.error('FFmpeg error:', err);
+          jobs.set(jobId, { ...job, status: 'error', error: 'Compositing failed' });
+        })
+        .on('end', () => {
+          const finalUrl = `/exports/${jobId}/final.mp4`;
+          jobs.set(jobId, { ...job, status: 'ready', progress: 100, finalVideoUrl: finalUrl });
+        })
+        .mergeToFile(outputPath, jobDir);
+
+      res.json({ status: 'started' });
+    } catch (error: any) {
+      console.error(error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Vite middleware for development
+  if (process.env.NODE_ENV !== "production") {
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: "spa",
+    });
+    app.use(vite.middlewares);
+  } else {
+    const distPath = path.join(process.cwd(), 'dist');
+    app.use(express.static(distPath));
+    app.get('*', (req, res) => {
+      res.sendFile(path.join(distPath, 'index.html'));
+    });
+  }
+
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`VerbaView server running on http://localhost:${PORT}`);
+  });
+}
+
+startServer();
